@@ -48,7 +48,7 @@ def my_consumer(request):
 
 @pytest.fixture(scope="session")
 def my_service_provider(consumer):
-    return pypact.Service("My Service Provider")
+    return pypact.Provider("My Service Provider")
 
 
 @pytest.fixture
@@ -60,8 +60,8 @@ def mock_service(request, my_consumer, my_service_provider):
 
 ```python
 @pytest.fixture
-def subject(my_service_provider):
-    subject = MyServiceProviderClient(my_service_provider.base_uri)
+def subject(mock_service):
+    subject = MyServiceProviderClient(mock_service.base_uri)
     return subject
 
 
