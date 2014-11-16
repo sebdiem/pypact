@@ -1,12 +1,12 @@
 language: python
 install:
   - pip install tox
-  - if [ "x$TOX_ENV" = 'xcoverage' ]; then pip install coveralls --use-mirrors; fi
+  - if [ "$TOX_ENV" = 'coverage' ]; then pip install coveralls --use-mirrors; fi
 script:
   - tox
 env:
   - TOXENV=full
   - TOXENV=coverage
 after_success:
-  if [ "x$TOX_ENV" = 'xcoverage' ]; then coveralls; fi
+  if [ "$TOX_ENV" = 'coverage' ]; then coveralls; fi
   coveralls
