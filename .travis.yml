@@ -9,4 +9,3 @@ env:
   - TOXENV=coverage
 after_success:
   if [ "$TOX_ENV" = 'coverage' ]; then coveralls; fi
-  coveralls
