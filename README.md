@@ -11,7 +11,7 @@ It is an implementation of https://github.com/bethesque/pact-specification.
 Travis CI Status: [![travis-ci.org Build Status](https://travis-ci.org/hartror/pypact.png)](https://travis-ci.org/hartror/pypact)
 
 
-## Proposed Usage
+## Client Proposed Usage
 
 ### 1. Start with your model
 
@@ -56,7 +56,7 @@ def mock_service(request, my_consumer, my_service_provider):
     return my_consumer.has_pact_with(my_service_provider)
 ```
 
-# 4. Write a failing spec for the client
+# 4. Write a failing test for the client
 
 ```python
 @pytest.fixture
@@ -82,4 +82,34 @@ def test_returns_something(subject, mock_service):
         something = subject.get_something()
 
     assert something == Something(name='A small something')
+```
+
+# 5. Run the tests
+
+```bash
+$ py.test
+```
+
+# 6. Implement the client
+
+```python
+import requests
+
+class MyServiceProviderClient(object):
+
+    def __init__(self, base_uri):
+        self.base_uri = base_uri
+
+    def get_something(self):
+        """
+        Get a something.
+        """
+        name = requests.get('{}/something'.format(self.base_uri)).json['name']
+        return Something('A small something')
+```
+
+# 7. Run the tests again
+
+```bash
+$ py.test
 ```
