@@ -1,1 +1,6 @@
+flake8>=2.4.0
 mock>=1.0.1
+pytest>=2.6.4
+pytest-cov>=1.8.1
+
+-e ./

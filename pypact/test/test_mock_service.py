@@ -15,6 +15,7 @@ def mock_consumer():
 def mock_provider():
     return mock.Mock()
 
+
 @pytest.fixture
 def mock_interaction_builder():
     return mock.Mock()
@@ -94,7 +95,7 @@ def test_mock_service_returns_interaction_builder_on_given(
 
     assert builder == (
         mock_interaction_builder
-            .given(TEST_STATE, mock_service.add_interaction))
+        .given(TEST_STATE, mock_service.add_interaction))
 
 
 def test_mock_service_returns_interaction_builder_on_upon_receiving(
@@ -110,7 +111,7 @@ def test_mock_service_returns_interaction_builder_on_upon_receiving(
 
     assert builder == (
         mock_interaction_builder
-            .upon_receiving(TEST_DESCRIPTION, mock_service.add_interaction))
+        .upon_receiving(TEST_DESCRIPTION, mock_service.add_interaction))
 
 
 def test_mock_service_accepts_a_new_interaction(mock_service):

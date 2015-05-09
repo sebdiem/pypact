@@ -14,4 +14,3 @@ def test_provider_creation(args, kwargs):
     provider = pypact.Provider(*args, **kwargs)
 
     assert provider.name == PROVIDER_NAME
-

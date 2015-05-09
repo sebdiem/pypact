@@ -1,4 +1,4 @@
-from .exceptions import PyPactException
+from .exceptions import PyPactServiceException
 
 
 class MockService(object):
@@ -34,7 +34,8 @@ class MockService(object):
         Start the mock service, loading the interactions into the pact server.
         """
         if not self.stopped:
-            raise PyPactException("Cannot start already started MockService.")
+            raise PyPactServiceException(
+                "Cannot start already started MockService.")
 
         self.stopped = False
 
@@ -43,7 +44,8 @@ class MockService(object):
         End the mock service, verifing the interactions with the pact server.
         """
         if self.stopped:
-            raise PyPactException("Cannot end already ended MockService.")
+            raise PyPactServiceException(
+                "Cannot end already ended MockService.")
 
         self.stopped = True
 
