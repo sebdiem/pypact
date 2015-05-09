@@ -113,38 +113,7 @@ def test_mock_service_returns_interaction_builder_on_upon_receiving(
             .upon_receiving(TEST_DESCRIPTION, mock_service.add_interaction))
 
 
-def test_mock_service_when_started_refuses_given(
-        mock_service,
-        mock_interaction_builder):
-    mock_service.start()
-
-    with pytest.raises(PyPactException):
-        mock_service.given(TEST_STATE)
-
-    assert mock_interaction_builder.given.called == False
-
-
-def test_mock_service_when_started_refuses_upon_receiving(
-        mock_service,
-        mock_interaction_builder):
-    mock_service.start()
-
-    with pytest.raises(PyPactException):
-        mock_service.upon_receiving(TEST_STATE)
-
-    assert mock_interaction_builder.upon_receiving.called == False
-
-
 def test_mock_service_accepts_a_new_interaction(mock_service):
     mock_interaction = mock.Mock()
     mock_service.add_interaction(mock_interaction)
     assert len(mock_service.interactions) == 1
-
-
-def test_mock_service_when_started_refuses_a_new_interaction(mock_service):
-    mock_interaction = mock.Mock()
-
-    mock_service.start()
-
-    with pytest.raises(PyPactException):
-        mock_service.add_interaction(mock_interaction)

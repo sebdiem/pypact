@@ -16,17 +16,9 @@ class MockService(object):
         self.interactions = []
 
     def given(self, state):
-        if not self.stopped:
-            raise PyPactException(
-                "Cannot build interaction on started MockService")
-
         return self.interaction_builder.given(state, self.add_interaction)
 
     def upon_receiving(self, description):
-        if not self.stopped:
-            raise PyPactException(
-                "Cannot build interaction on started MockService")
-
         return (
             self.interaction_builder
                 .upon_receiving(description, self.add_interaction))
@@ -35,10 +27,6 @@ class MockService(object):
         """
         Add a new interaction to the mock service.
         """
-        if not self.stopped:
-            raise PyPactException(
-                "Cannot add interaction to already started MockService.")
-
         self.interactions.append(interaction)
 
     def start(self):
