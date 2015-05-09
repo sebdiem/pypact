@@ -53,7 +53,7 @@ def my_service_provider(consumer):
 
 @pytest.fixture
 def mock_service(request, my_consumer, my_service_provider):
-    return my_consumer.has_pact_with(my_service_provider)
+    return my_consumer.has_pact_with(my_service_provider, port=1234)
 ```
 
 # 4. Write a failing test for the client
