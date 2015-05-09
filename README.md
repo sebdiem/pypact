@@ -8,8 +8,10 @@ provider codebase.
 
 It is an implementation of https://github.com/bethesque/pact-specification.
 
-Travis CI Status: [![travis-ci.org Build Status](https://travis-ci.org/hartror/pypact.png)](https://travis-ci.org/hartror/pypact)
+## CI Status
 
+[![travis-ci.org Build Status](https://travis-ci.org/hartror/pypact.png)](https://travis-ci.org/hartror/pypact)
+[![Coverage Status](https://coveralls.io/repos/hartror/pypact/badge.svg)](https://coveralls.io/r/hartror/pypact)
 
 ## Client Proposed Usage
 
