@@ -1,7 +1,7 @@
 from setuptools import setup
 
 VERSION = "0.0.1"
-REQUIRES = []
+REQUIRES = ["requests>=2.6.0"]
 
 setup(
     name='pypact',
