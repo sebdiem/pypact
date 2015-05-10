@@ -135,10 +135,11 @@ def test_client_integration(real_client):
     requests.get('{}/alligators'.format(REAL_CLIENT_URI))
     requests.post(
         '{}/alligators'.format(REAL_CLIENT_URI),
+        headers={'Content-Type': 'application/json'},
         data=json.dumps({'name': 'Terrance'}))
 
     verification = real_client.get_verification()
 
-    assert verification == ''
+    assert verification == 'Interactions matched'
 
     real_client.delete_interactions()
