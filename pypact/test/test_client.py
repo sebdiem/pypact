@@ -1,6 +1,5 @@
 import json
 import pytest
-import mock
 import requests
 import requests_mock
 
@@ -82,6 +81,7 @@ def test_client_post_pact(client, mock_request):
 
 REAL_CLIENT_URI = 'http://localhost:1234'
 
+
 @pytest.fixture
 def real_client(request):
     client = MockServerClient(REAL_CLIENT_URI)
@@ -132,7 +132,7 @@ def test_client_integration(real_client):
         }
     })
 
-    alligators = requests.get('{}/alligators'.format(REAL_CLIENT_URI))
+    requests.get('{}/alligators'.format(REAL_CLIENT_URI))
     requests.post(
         '{}/alligators'.format(REAL_CLIENT_URI),
         data=json.dumps({'name': 'Terrance'}))
@@ -140,14 +140,5 @@ def test_client_integration(real_client):
     verification = real_client.get_verification()
 
     assert verification == ''
-
-    #client.post_pact({
-    #    'consumer': {
-    #        'name': 'My Service Consumer'
-    #    },
-    #    'provider': {
-    #        'name': 'My Service Provider'
-    #    }
-    #})
 
     real_client.delete_interactions()
