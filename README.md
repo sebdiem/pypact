@@ -40,7 +40,7 @@ class MyServiceProviderClient(object):
         pass
 ```
 
-# 3. Configure the mock server
+### 3. Configure the mock server
 
 ```python
 @pytest.fixture(scope="session")
@@ -58,7 +58,7 @@ def mock_service(request, my_consumer, my_service_provider):
     return my_consumer.has_pact_with(my_service_provider, port=1234)
 ```
 
-# 4. Write a failing test for the client
+### 4. Write a failing test for the client
 
 ```python
 @pytest.fixture
@@ -86,13 +86,13 @@ def test_returns_something(subject, mock_service):
     assert something == Something(name='A small something')
 ```
 
-# 5. Run the tests
+### 5. Run the tests
 
 ```bash
 $ py.test
 ```
 
-# 6. Implement the client
+### 6. Implement the client
 
 ```python
 import requests
@@ -110,7 +110,7 @@ class MyServiceProviderClient(object):
         return Something('A small something')
 ```
 
-# 7. Run the tests again
+### 7. Run the tests again
 
 ```bash
 $ py.test
