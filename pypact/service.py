@@ -16,12 +16,12 @@ class MockService(object):
         self.interactions = []
 
     def given(self, state):
-        return self.interaction_builder.given(state, self.add_interaction)
+        return self.interaction_builder(self.add_interaction).given(state)
 
     def upon_receiving(self, description):
         return (
-            self.interaction_builder
-                .upon_receiving(description, self.add_interaction))
+            self.interaction_builder(self.add_interaction)
+                .upon_receiving(description))
 
     def add_interaction(self, interaction):
         """

@@ -89,12 +89,16 @@ def test_mock_service_returns_interaction_builder_on_given(
 
     builder = mock_service.given(TEST_STATE)
 
+    mock_interaction_builder.assert_called_once_with(
+        mock_service.add_interaction)
+
     (mock_interaction_builder
+        .return_value
         .given
-        .assert_called_once_with(TEST_STATE, mock_service.add_interaction))
+        .assert_called_once_with(TEST_STATE))
 
     assert builder == (
-        mock_interaction_builder
+        mock_interaction_builder()
         .given(TEST_STATE, mock_service.add_interaction))
 
 
@@ -104,13 +108,16 @@ def test_mock_service_returns_interaction_builder_on_upon_receiving(
 
     builder = mock_service.upon_receiving(TEST_DESCRIPTION)
 
+    mock_interaction_builder.assert_called_once_with(
+        mock_service.add_interaction)
+
     (mock_interaction_builder
+        .return_value
         .upon_receiving
-        .assert_called_once_with(
-            TEST_DESCRIPTION, mock_service.add_interaction))
+        .assert_called_once_with(TEST_DESCRIPTION))
 
     assert builder == (
-        mock_interaction_builder
+        mock_interaction_builder()
         .upon_receiving(TEST_DESCRIPTION, mock_service.add_interaction))
 
 
