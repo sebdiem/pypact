@@ -206,7 +206,7 @@ if __name__ == '__main__':
         checker = {'request': request_checker, 'response': response_checker}[request_or_response]
         check_file(path, checker)
         sys.exit(0)
-    for root, dirs, files in os.walk('testcases'):
+    for root, dirs, files in os.walk('/Users/Seb/temp/pact-specification/testcases'):
         for file_ in files:
             if file_.split('.')[-1] == 'json':
                 path = os.path.join(root, file_)
