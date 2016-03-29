@@ -9,9 +9,48 @@ import sys
 import unittest
 import urlparse
 
+class BaseError(object):
+    def __repr__(self):
+        return self.__class__.__name__
+
+class Difference(BaseError):
+    def __init__(self, actual, expected):
+        self.actual = actual
+        self.expected = expected
+
+    def __repr__(self):
+        return '%s("expected %s, got %s")' % (self.__class__.__name__, repr(self.expected), repr(self.actual))
+
+class RegexNotMatched(Difference):
+    pass
+
+class MinNumberNotMatched(Difference):
+    pass
+
+class UnexpectedKey(BaseError):
+    def __init__(self, key):
+        self.key = key
+
+    def __repr__(self):
+        return "%s(%s)" % (self.__class__.__name__, repr(self.key))
+
+class KeyNotFound(UnexpectedKey):
+    pass
+
+class UnexpectedIndex(UnexpectedKey):
+    pass
+
+class IndexNotFound(BaseError):
+    def __init__(self, actual, expected):
+        self.actual = actual + [self.__class__] * (len(expected) - len(actual))
+        self.expected = expected
+
+    def __repr__(self):
+        return '%s("expected %s, got %s")' % (self.__class__.__name__, repr(self.expected), repr(self.actual))
+
 
 class Empty(object):
-    """Placeholder for Empty objects."""
+    """Placeholder for Empty BaseErrors."""
     pass
 
 
@@ -23,160 +62,194 @@ def format_header_value(header_value):
     return ','.join(value.strip(' ') for value in header_value.split(','))
 
 
+def simple_check(path, actual, expected, prepare_function=lambda x: x):
+    errors = []
+    if prepare_function(actual) != prepare_function(expected):
+        errors.append((path, Difference(actual, expected)))
+    return errors
+
+
 def check_headers(actual, expected, matching_rules):
+    errors = []
+    path = '$.headers'
     if actual is None or actual is Empty:
-        return expected is None or expected is Empty
+        if expected is not None and expected is not Empty:
+            errors.append((path, Difference(actual, expected)))
 
-    if expected is Empty:
-        return True
+    elif expected is not Empty:
+        expected = dict((k.lower(), format_header_value(v)) for (k, v) in expected.items())
+        actual = dict((k.lower(), format_header_value(v)) for (k, v) in actual.items() if k.lower() in expected)
 
-    expected = dict((k.lower(), format_header_value(v)) for (k, v) in expected.items())
-    actual = dict((k.lower(), format_header_value(v)) for (k, v) in actual.items() if k.lower() in expected)
+        matching_rules = dict((k.lower(), v) for k, v in matching_rules.items() if k.startswith(path))
 
-    prefix = '$.headers'
-    matching_rules = dict((k[len(prefix):].lower(), v) for k, v in matching_rules.items() if k.startswith(prefix))
+        errors.extend(walk_and_assert(actual, expected, paths=(path,), rules=matching_rules, ignore_extra_keys=True))
 
-    try:
-        walk_and_assert(actual, expected, rules=matching_rules, ignore_extra_keys=True)
-    except AssertionError:
-        return False
-    return True
+    return errors
 
 
 def check_request_query(actual, expected):
+    errors = []
+    path = '$.query'
     if actual is None or actual is Empty:
-        return expected is None or expected is Empty
+        if expected is not None and expected is not Empty:
+            errors.append((path, Difference(actual, expected)))
 
-    if expected is Empty:
-        return True
+    elif expected is not Empty:
+        actual = urlparse.parse_qs(actual, keep_blank_values=True)
+        expected = urlparse.parse_qs(expected, keep_blank_values=True)
+        errors.extend(walk_and_assert(actual, expected, paths=(path,), ignore_extra_keys=False))
 
-    actual = urlparse.parse_qs(actual, keep_blank_values=True)
-    expected = urlparse.parse_qs(expected, keep_blank_values=True)
-
-    return actual == expected
+    return errors
 
 
 def check_body(actual, expected, matching_rules, ignore_extra_keys):
+    errors = []
+    path = '$.body'
     if actual is None or actual is Empty:
-        return expected is None or expected is Empty
+        if expected is not None and expected is not Empty:
+            errors.append((path, Difference(actual, expected)))
 
-    if expected is Empty:
-        return True
+    elif expected is not Empty:
+        matching_rules = dict((k, v) for k, v in matching_rules.items() if k.startswith(path))
+        errors.extend(
+            walk_and_assert(actual, expected, paths=(path,), rules=matching_rules, ignore_extra_keys=ignore_extra_keys)
+        )
 
-    prefix = '$.body'
-    matching_rules = dict((k[len(prefix):], v) for k, v in matching_rules.items() if k.startswith(prefix))
-
-    try:
-        walk_and_assert(actual, expected, rules=matching_rules, ignore_extra_keys=ignore_extra_keys)
-    except AssertionError:
-        return False
-    return True
+    return errors
 
 
-def check_rule(rule, actual, expected):
+def check_rule(rule, actual, expected, path):
     if not rule:
         return
 
+    errors = []
     match = rule.get('match')
     if match == 'type':
-        assert type(actual) == type(expected)
+        if type(actual) != type(expected):
+            errors.append((path, Difference(type(actual), type(expected))))
     elif match == 'regex':
-        regex = rule.get('regex')
-        assert regex
-        assert re.match(regex, actual)
+        regex = rule['regex']
+        if not re.match(regex, actual):
+            errors.append((path, RegexNotMatched(actual, regex)))
 
     min_number = rule.get('min')
     if min_number:
-        assert len(actual) >= min_number
+        if len(actual) < min_number:
+            errors.append((path, MinNumberNotMatched(len(actual), min_number)))
+    return errors
 
 
-def walk_and_assert(actual, expected, rules=None, roots=None, ignore_extra_keys=True):
-    roots = roots or ('',)
+def walk_and_assert(actual, expected, rules=None, paths=None, ignore_extra_keys=True):
+    paths = paths or ('',)
     rules = rules or {}
-    print next(root for root in roots if '*' not in root)
+    errors = []
+    explicit_path = next(path for path in paths if '*' not in path)
 
-    checked_rules = [rules[root] for root in roots if root in rules]
+    checked_rules = [rules[path] for path in paths if path in rules]
     for rule in checked_rules:
-        check_rule(rule, actual, expected)
+        errors.extend(check_rule(rule, actual, expected, explicit_path))
 
     if type(expected) == dict:
-        assert isinstance(actual, collections.Mapping)
-        next_roots = tuple('%s.*' % root for root in roots)
-        for key, expected_value in expected.items():
-            actual_value = actual.get(key, Empty)
-            walk_and_assert(
-                actual_value,
-                expected_value,
-                rules=rules,
-                roots=(
-                    next_roots +
-                    tuple('%s.%s' % (root, key) for root in roots) +  # dot notation
-                    tuple("%s['%s']" % (root, key) for root in roots)  # bracket notation
-                ),
-                ignore_extra_keys=ignore_extra_keys,
-            )
-        if not ignore_extra_keys:
-            assert set(actual.keys()) == set(expected.keys())
+        if not isinstance(actual, collections.Mapping):
+            errors.append(Difference(actual, expected))
+        else:
+            next_paths = tuple('%s.*' % path for path in paths)
+            for key, expected_value in expected.items():
+                if key not in actual:
+                    errors.append((explicit_path, KeyNotFound(key)))
+                else:
+                    actual_value = actual[key]
+                    errors.extend(walk_and_assert(
+                        actual_value,
+                        expected_value,
+                        rules=rules,
+                        paths=(
+                            next_paths +
+                            tuple('%s.%s' % (path, key) for path in paths) +  # dot notation
+                            tuple("%s['%s']" % (path, key) for path in paths)  # bracket notation
+                        ),
+                        ignore_extra_keys=ignore_extra_keys,
+                    ))
+            if not ignore_extra_keys:
+                unexpected_key = set(actual.keys()) - set(expected.keys())
+                errors.extend([(explicit_path, UnexpectedKey(key)) for key in unexpected_key])
+
     elif type(expected) == list:  # Do not use collections.Sequence, it also matches strings
-        next_roots = tuple('%s[*]' % root for root in roots)
+        next_paths = tuple('%s[*]' % path for path in paths)
+        if len(actual) < len(expected):
+            errors.append((explicit_path, IndexNotFound(actual, expected)))
         for i, expected_value in enumerate(expected):
-            assert i < len(actual)
-            walk_and_assert(
-                actual[i],
-                expected_value,
-                rules=rules,
-                roots=next_roots + tuple('%s[%s]' % (root, i) for root in roots),
-                ignore_extra_keys=ignore_extra_keys
-            )
+            if i < len(actual):
+                errors.extend(walk_and_assert(
+                    actual[i],
+                    expected_value,
+                    rules=rules,
+                    paths=next_paths + tuple('%s[%s]' % (path, i) for path in paths),
+                    ignore_extra_keys=ignore_extra_keys
+                ))
         for i, actual_value in enumerate(actual[len(expected):], len(expected)):
-            walk_and_assert(
+            errors.extend(walk_and_assert(
                 actual[i],
-                expected[0],  # use expected_value[0] as default: is this what we want?
+                expected[0],  # use expected_value[0] as default: is this what we want? We need UnexpectedIndex()
                 rules=rules,
-                roots=next_roots + tuple('%s[%s]' % (root, i) for root in roots),
+                paths=next_paths + tuple('%s[%s]' % (path, i) for path in paths),
                 ignore_extra_keys=ignore_extra_keys
-            )
+            ))
+
     elif not checked_rules:
         # no rule matching => default to literal matching
-        assert actual == expected
+        if actual != expected:
+            errors.append((explicit_path, Difference(actual, expected)))
+
+    return errors
 
 
 def request_checker(actual, expected):
-    try:
-        assert actual['method'].lower() == expected['method'].lower()
-        assert actual['path'] == expected['path']
-        assert check_request_query(get_key(actual, 'query'), get_key(expected, 'query'))
-        assert check_headers(
+    errors = []
+    errors.extend(simple_check('$.method', actual['method'], expected['method'], lambda x: x.lower()))
+    errors.extend(simple_check('$.path', actual['path'], expected['path']))
+    errors.extend(check_request_query(get_key(actual, 'query'), get_key(expected, 'query')))
+    errors.extend(
+        check_headers(
             get_key(actual, 'headers'),
             get_key(expected, 'headers'),
             expected.get('matchingRules', {}),
         )
-        assert check_body(
+    )
+    errors.extend(
+        check_body(
             get_key(actual, 'body'),
             get_key(expected, 'body'),
             matching_rules=expected.get('matchingRules', {}),
             ignore_extra_keys=False,
         )
-    except AssertionError:
+    )
+    if errors:
+        print errors
         return False
     return True
 
 
 def response_checker(actual, expected):
-    try:
-        assert get_key(actual, 'status') == get_key(expected, 'status')
-        assert check_headers(
+    errors = []
+    errors.extend(simple_check('$.status', get_key(actual, 'status'), get_key(expected, 'status')))
+    errors.extend(
+        check_headers(
             get_key(actual, 'headers'),
             get_key(expected, 'headers'),
             expected.get('matchingRules', {}),
         )
-        assert check_body(
+    )
+    errors.extend(
+        check_body(
             get_key(actual, 'body'),
             get_key(expected, 'body'),
             matching_rules=expected.get('matchingRules', {}),
             ignore_extra_keys=True,
         )
-    except AssertionError:
+    )
+    if errors:
+        print errors
         return False
     return True
 
