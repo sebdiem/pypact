@@ -18,35 +18,45 @@ class Difference(BaseError):
         self.actual = actual
         self.expected = expected
 
+    def split(self):
+        convert = lambda x: str(x) if isinstance(x, BaseError) else x
+        return convert(self.actual), convert(self.expected)
+
     def __repr__(self):
         return '%s("expected %s, got %s")' % (self.__class__.__name__, repr(self.expected), repr(self.actual))
 
 class RegexNotMatched(Difference):
     pass
 
-class MinNumberNotMatched(Difference):
+class TypeNotMatched(Difference):
     pass
 
-class UnexpectedKey(BaseError):
-    def __init__(self, key):
-        self.key = key
+class MinNumberNotMatched(BaseError):
+    def __init__(self, actual, expected, min_number):
+        self.actual = actual
+        self.expected = expected
+        self.min_number = min_number
+
+    def split(self):
+        actual = self.actual + [str(IndexNotFound)] * (self.min_number - len(self.actual))
+        expected = self.expected + [self.expected[-1]] * (self.min_number - len(self.expected))
+        return actual, expected
 
     def __repr__(self):
-        return "%s(%s)" % (self.__class__.__name__, repr(self.key))
+        return '%s("expected %s (min nbumer %s), got %s")' % (
+            self.__class__.__name__, repr(self.expected), self.min_number, repr(self.actual))
 
-class KeyNotFound(UnexpectedKey):
+class UnexpectedKey(BaseError):
     pass
 
-class UnexpectedIndex(UnexpectedKey):
+class KeyNotFound(BaseError):
+    pass
+
+class UnexpectedIndex(BaseError):
     pass
 
 class IndexNotFound(BaseError):
-    def __init__(self, actual, expected):
-        self.actual = actual + [self.__class__] * (len(expected) - len(actual))
-        self.expected = expected
-
-    def __repr__(self):
-        return '%s("expected %s, got %s")' % (self.__class__.__name__, repr(self.expected), repr(self.actual))
+    pass
 
 
 class Empty(object):
@@ -118,30 +128,30 @@ def check_body(actual, expected, matching_rules, ignore_extra_keys):
     return errors
 
 
-def check_rule(rule, actual, expected, path):
+def check_rule(rule, actual, expected):
     if not rule:
         return
 
-    errors = []
     match = rule.get('match')
     if match == 'type':
         if type(actual) != type(expected):
-            errors.append((path, Difference(type(actual), type(expected))))
+            return TypeNotMatched(actual, expected)
     elif match == 'regex':
         regex = rule['regex']
         if not re.match(regex, actual):
-            errors.append((path, RegexNotMatched(actual, regex)))
+            return RegexNotMatched(actual, regex)
 
     min_number = rule.get('min')
     if min_number:
         if len(actual) < min_number:
-            errors.append((path, MinNumberNotMatched(len(actual), min_number)))
-    return errors
+            return MinNumberNotMatched(actual, expected, min_number)
 
 
-def prepare(*trees):
-    """This function tries to sanitize a list of trees so that they can be processed by the differ.
-
+def prepare(actual, expected, sanitized_keys):
+    """
+        This function tries to sanitize actual and expected trees so that they can be processed by the differ.
+        A few checks are performed on the expected tree to make sure it is valid.
+        Both trees are processed with the following:
         - method is lowercased
         - headers keys are lowercased
         - headers keys are lowercased in matchingRules
@@ -155,7 +165,9 @@ def prepare(*trees):
         except:
             return x
 
-    for tree in trees:
+    sanitize_empty_keys(actual, expected, sanitized_keys)
+
+    for tree in (actual, expected):
         if 'method' in tree:
             tree['method'] = apply_safe(lambda x: x.lower(), tree['method'])
         if 'headers' in tree:
@@ -172,59 +184,92 @@ def prepare(*trees):
                 tree['query'],
             )
 
+def walk(tree, func=lambda x: None):
+    """
+        Walk a tree until all leaves are reached once.
+
+        A function can be applied on all leaves through the optional argument ``func``
+    """
+    if type(tree) == dict:
+        for key, value in tree.items():
+            walk(value, func)
+    elif type(tree) in (list, tuple, set):
+        for el in tree:
+            walk(el, func)
+    else:
+        func(tree)
+
+
+def sanitize_empty_keys(actual, expected, keys):
+    for key in keys:
+        expected_value, actual_value = expected.get(key, Empty), actual.get(key, Empty)
+        if expected_value is Empty:
+            expected[key] = Empty
+            actual[key] = Empty  # No check at all if key is not in expected
+        elif actual_value in (None, Empty) and expected_value is None:
+            actual[key] = None
+
 
 def walk_and_assert(actual, expected, rules=None, paths=None, ignore_extra_keys=True):
-    paths = paths or ('',)
+    paths = paths or ('$.',)
     rules = rules or {}
-    errors = []
-    explicit_path = next(path for path in paths if '*' not in path)
+    diff_tree = None
 
     checked_rules = [rules[path] for path in paths if path in rules]
     for rule in checked_rules:
-        errors.extend(check_rule(rule, actual, expected, explicit_path))
+        diff = check_rule(rule, actual, expected)
+        if diff:
+            return diff
 
     if type(expected) == dict:
         if not isinstance(actual, collections.Mapping):
-            errors.append(Difference(actual, expected))
-        else:
-            next_paths = tuple('%s.*' % path for path in paths)
-            for key, expected_value in expected.items():
-                if key not in actual:
-                    errors.append((explicit_path, KeyNotFound(key)))
-                else:
-                    actual_value = actual[key]
-                    errors.extend(walk_and_assert(
-                        actual_value,
-                        expected_value,
-                        rules=rules,
-                        paths=(
-                            next_paths +
-                            tuple('%s.%s' % (path, key) for path in paths) +  # dot notation
-                            tuple("%s['%s']" % (path, key) for path in paths)  # bracket notation
-                        ),
-                        ignore_extra_keys=ignore_extra_keys,
-                    ))
-            if not ignore_extra_keys:
-                unexpected_key = set(actual.keys()) - set(expected.keys())
-                errors.extend([(explicit_path, UnexpectedKey(key)) for key in unexpected_key])
+            return TypeNotMatched(actual, expected)
 
-    elif type(expected) == list:  # Do not use collections.Sequence, it also matches strings
+        diff_tree = {}
+        next_paths = tuple('%s.*' % path for path in paths)
+        for key, expected_value in expected.items():
+            if key not in actual:
+                diff_tree[key] = Difference(KeyNotFound, expected_value)
+            else:
+                actual_value = actual[key]
+                diff_tree[key] = walk_and_assert(
+                    actual_value,
+                    expected_value,
+                    rules=rules,
+                    paths=(
+                        next_paths +
+                        tuple('%s.%s' % (path, key) for path in paths) +  # dot notation
+                        tuple("%s['%s']" % (path, key) for path in paths)  # bracket notation
+                    ),
+                    ignore_extra_keys=ignore_extra_keys,
+                )
+        if not ignore_extra_keys:
+            unexpected_keys = set(actual.keys()) - set(expected.keys())
+            for key in unexpected_keys:
+                diff_tree[key] = Difference(actual[key], UnexpectedKey)
+
+    elif type(expected) in (list, tuple, set):  # Do not use collections.Sequence, it also matches strings
+        if not isinstance(actual, list):
+            return TypeNotMatched(actual, expected)
+
+        diff_tree = []
         next_paths = tuple('%s[*]' % path for path in paths)
-        if len(actual) < len(expected):
-            errors.append((explicit_path, IndexNotFound(actual, expected)))
         for i, expected_value in enumerate(expected):
-            if i < len(actual):
-                errors.extend(walk_and_assert(
-                    actual[i],
+            if i >= len(actual):
+                diff_tree.append(Difference(IndexNotFound, expected_value))
+            else:
+                actual_value = actual[i]
+                diff_tree.append(walk_and_assert(
+                    actual_value,
                     expected_value,
                     rules=rules,
                     paths=next_paths + tuple('%s[%s]' % (path, i) for path in paths),
-                    ignore_extra_keys=ignore_extra_keys
+                    ignore_extra_keys=ignore_extra_keys,
                 ))
         for i, actual_value in enumerate(actual[len(expected):], len(expected)):
-            errors.extend(walk_and_assert(
-                actual[i],
-                expected[0],  # use expected_value[0] as default: is this what we want? We need UnexpectedIndex()
+            diff_tree.append(walk_and_assert(
+                actual_value,
+                expected[0],  # use expected_value[0] as default: is this what we want? When do we UnexpectedIndex()?
                 rules=rules,
                 paths=next_paths + tuple('%s[%s]' % (path, i) for path in paths),
                 ignore_extra_keys=ignore_extra_keys
@@ -232,67 +277,69 @@ def walk_and_assert(actual, expected, rules=None, paths=None, ignore_extra_keys=
 
     elif not checked_rules:
         # no rule matching => default to literal matching
-        if actual != expected:
-            errors.append((explicit_path, Difference(actual, expected)))
+        diff_tree = expected if actual == expected else Difference(actual, expected)
 
-    return errors
-
-
-def build_diff_tree(errors):
-    pass
+    return diff_tree
 
 
 def request_checker(actual, expected):
+    prepare(actual, expected, sanitized_keys=('headers', 'query', 'body'))
+    rules = expected.pop('matchingRules', {})
+    ignore_extra_keys = ('headers',)
+    diff_tree = {}
+    for key in ('method', 'path', 'query', 'headers', 'body'):
+        diff_tree[key] = walk_and_assert(
+            actual[key],
+            expected[key],
+            rules=rules,
+            paths=('$.%s' % key,),
+            ignore_extra_keys=key in ignore_extra_keys,
+        )
+
     errors = []
-    errors.extend(simple_check('$.method', actual['method'], expected['method'], lambda x: x.lower()))
-    errors.extend(simple_check('$.path', actual['path'], expected['path']))
-    errors.extend(check_request_query(get_key(actual, 'query'), get_key(expected, 'query')))
-    errors.extend(
-        check_headers(
-            get_key(actual, 'headers'),
-            get_key(expected, 'headers'),
-            expected.get('matchingRules', {}),
-        )
-    )
-    errors.extend(
-        check_body(
-            get_key(actual, 'body'),
-            get_key(expected, 'body'),
-            matching_rules=expected.get('matchingRules', {}),
-            ignore_extra_keys=False,
-        )
-    )
-    prepare(actual, expected)
-    print actual, expected
-    if errors:
-        print errors
-        return False
-    return True
+    build_trees_from_diff(diff_tree, errors)
+    return not errors
+
+
+def build_trees_from_diff(diff, errors):
+    if type(diff) == dict:
+        actual, expected = {}, {}
+        for key, value in diff.items():
+            actual_next, expected_next = build_trees_from_diff(value, errors)
+            actual[key] = actual_next
+            expected[key] = expected_next
+    elif type(diff) in (list, tuple, set):
+        actual, expected = [], []
+        for el in diff:
+            actual_next, expected_next = build_trees_from_diff(el, errors)
+            actual.append(actual_next)
+            expected.append(expected_next)
+    else:
+        if isinstance(diff, BaseError):
+            errors.append(diff)
+            actual, expected = diff.split()
+        else:
+            actual, expected = diff, diff
+    return actual, expected
 
 
 def response_checker(actual, expected):
+    prepare(actual, expected, sanitized_keys=('headers', 'status', 'body'))
+    rules = expected.pop('matchingRules', {})
+    ignore_extra_keys = ('headers', 'body')
+    diff_tree = {}
+    for key in ('status', 'headers', 'body'):
+        diff_tree[key] = walk_and_assert(
+            actual[key],
+            expected[key],
+            rules=rules,
+            paths=('$.%s' % key,),
+            ignore_extra_keys=key in ignore_extra_keys,
+        )
+
     errors = []
-    errors.extend(simple_check('$.status', get_key(actual, 'status'), get_key(expected, 'status')))
-    errors.extend(
-        check_headers(
-            get_key(actual, 'headers'),
-            get_key(expected, 'headers'),
-            expected.get('matchingRules', {}),
-        )
-    )
-    errors.extend(
-        check_body(
-            get_key(actual, 'body'),
-            get_key(expected, 'body'),
-            matching_rules=expected.get('matchingRules', {}),
-            ignore_extra_keys=True,
-        )
-    )
-    prepare(actual, expected)
-    if errors:
-        print errors
-        return False
-    return True
+    build_trees_from_diff(diff_tree, errors)
+    return not errors
 
 
 def check_file(file_, checker):
