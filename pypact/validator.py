@@ -139,6 +139,40 @@ def check_rule(rule, actual, expected, path):
     return errors
 
 
+def prepare(*trees):
+    """This function tries to sanitize a list of trees so that they can be processed by the differ.
+
+        - method is lowercased
+        - headers keys are lowercased
+        - headers keys are lowercased in matchingRules
+        - query params are converted to a dict of lists
+
+        The input trees are modified in place.
+    """
+    def apply_safe(function, x):
+        try:
+            return function(x)
+        except:
+            return x
+
+    for tree in trees:
+        if 'method' in tree:
+            tree['method'] = apply_safe(lambda x: x.lower(), tree['method'])
+        if 'headers' in tree:
+            tree['headers'] = apply_safe(lambda x: dict((k.lower(), v) for k, v in x.items()), tree['headers'])
+        if 'matchingRules' in tree:
+            lower_header = lambda x: x.lower() if x.startswith('$.headers') else x
+            tree['matchingRules'] = apply_safe(
+                lambda d: dict((lower_header(k), v) for k, v in d.items()),
+                tree['matchingRules'],
+            )
+        if 'query' in tree:
+            tree['query'] = apply_safe(
+                lambda x: urlparse.parse_qs(x, keep_blank_values=True),
+                tree['query'],
+            )
+
+
 def walk_and_assert(actual, expected, rules=None, paths=None, ignore_extra_keys=True):
     paths = paths or ('',)
     rules = rules or {}
@@ -204,6 +238,10 @@ def walk_and_assert(actual, expected, rules=None, paths=None, ignore_extra_keys=
     return errors
 
 
+def build_diff_tree(errors):
+    pass
+
+
 def request_checker(actual, expected):
     errors = []
     errors.extend(simple_check('$.method', actual['method'], expected['method'], lambda x: x.lower()))
@@ -224,6 +262,8 @@ def request_checker(actual, expected):
             ignore_extra_keys=False,
         )
     )
+    prepare(actual, expected)
+    print actual, expected
     if errors:
         print errors
         return False
@@ -248,6 +288,7 @@ def response_checker(actual, expected):
             ignore_extra_keys=True,
         )
     )
+    prepare(actual, expected)
     if errors:
         print errors
         return False
