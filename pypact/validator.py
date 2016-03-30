@@ -48,7 +48,7 @@ class MinNumberNotMatched(BaseError):
         self.min_number = min_number
 
     def split(self):
-        actual = self.actual + [str(IndexNotFound)] * (self.min_number - len(self.actual))
+        actual = self.actual + [IndexNotFound.__name__] * (self.min_number - len(self.actual))
         expected = self.expected + [self.expected[-1]] * (self.min_number - len(self.expected))
         return actual, expected
 
@@ -243,7 +243,8 @@ def request_checker(actual, expected):
         )
 
     errors = []
-    print build_trees_from_diff(diff_tree, errors)
+    tree1, tree2 = build_trees_from_diff(diff_tree, errors)
+    format_diff(tree1, tree2)
     return not errors
 
 
