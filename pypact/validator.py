@@ -2,6 +2,8 @@ from __future__ import unicode_literals
 
 import collections
 import copy
+import difflib
+import inspect
 import json
 import os
 import re
@@ -10,8 +12,19 @@ import unittest
 import urlparse
 
 class BaseError(object):
-    def __repr__(self):
-        return self.__class__.__name__
+    pass
+
+class UnexpectedKey(BaseError):
+    pass
+
+class KeyNotFound(BaseError):
+    pass
+
+class UnexpectedIndex(BaseError):
+    pass
+
+class IndexNotFound(BaseError):
+    pass
 
 class Difference(BaseError):
     def __init__(self, actual, expected):
@@ -19,11 +32,8 @@ class Difference(BaseError):
         self.expected = expected
 
     def split(self):
-        convert = lambda x: str(x) if isinstance(x, BaseError) else x
+        convert = lambda x: getattr(x, '__name__', x)
         return convert(self.actual), convert(self.expected)
-
-    def __repr__(self):
-        return '%s("expected %s, got %s")' % (self.__class__.__name__, repr(self.expected), repr(self.actual))
 
 class RegexNotMatched(Difference):
     pass
@@ -42,109 +52,10 @@ class MinNumberNotMatched(BaseError):
         expected = self.expected + [self.expected[-1]] * (self.min_number - len(self.expected))
         return actual, expected
 
-    def __repr__(self):
-        return '%s("expected %s (min nbumer %s), got %s")' % (
-            self.__class__.__name__, repr(self.expected), self.min_number, repr(self.actual))
-
-class UnexpectedKey(BaseError):
-    pass
-
-class KeyNotFound(BaseError):
-    pass
-
-class UnexpectedIndex(BaseError):
-    pass
-
-class IndexNotFound(BaseError):
-    pass
-
 
 class Empty(object):
-    """Placeholder for Empty BaseErrors."""
+    """Placeholder for Empty objects."""
     pass
-
-
-def get_key(d, key):
-    return d.get(key, Empty)
-
-
-def format_header_value(header_value):
-    return ','.join(value.strip(' ') for value in header_value.split(','))
-
-
-def simple_check(path, actual, expected, prepare_function=lambda x: x):
-    errors = []
-    if prepare_function(actual) != prepare_function(expected):
-        errors.append((path, Difference(actual, expected)))
-    return errors
-
-
-def check_headers(actual, expected, matching_rules):
-    errors = []
-    path = '$.headers'
-    if actual is None or actual is Empty:
-        if expected is not None and expected is not Empty:
-            errors.append((path, Difference(actual, expected)))
-
-    elif expected is not Empty:
-        expected = dict((k.lower(), format_header_value(v)) for (k, v) in expected.items())
-        actual = dict((k.lower(), format_header_value(v)) for (k, v) in actual.items() if k.lower() in expected)
-
-        matching_rules = dict((k.lower(), v) for k, v in matching_rules.items() if k.startswith(path))
-
-        errors.extend(walk_and_assert(actual, expected, paths=(path,), rules=matching_rules, ignore_extra_keys=True))
-
-    return errors
-
-
-def check_request_query(actual, expected):
-    errors = []
-    path = '$.query'
-    if actual is None or actual is Empty:
-        if expected is not None and expected is not Empty:
-            errors.append((path, Difference(actual, expected)))
-
-    elif expected is not Empty:
-        actual = urlparse.parse_qs(actual, keep_blank_values=True)
-        expected = urlparse.parse_qs(expected, keep_blank_values=True)
-        errors.extend(walk_and_assert(actual, expected, paths=(path,), ignore_extra_keys=False))
-
-    return errors
-
-
-def check_body(actual, expected, matching_rules, ignore_extra_keys):
-    errors = []
-    path = '$.body'
-    if actual is None or actual is Empty:
-        if expected is not None and expected is not Empty:
-            errors.append((path, Difference(actual, expected)))
-
-    elif expected is not Empty:
-        matching_rules = dict((k, v) for k, v in matching_rules.items() if k.startswith(path))
-        errors.extend(
-            walk_and_assert(actual, expected, paths=(path,), rules=matching_rules, ignore_extra_keys=ignore_extra_keys)
-        )
-
-    return errors
-
-
-def check_rule(rule, actual, expected):
-    if not rule:
-        return
-
-    match = rule.get('match')
-    if match == 'type':
-        if type(actual) != type(expected):
-            return TypeNotMatched(actual, expected)
-    elif match == 'regex':
-        regex = rule['regex']
-        if not re.match(regex, actual):
-            return RegexNotMatched(actual, regex)
-
-    min_number = rule.get('min')
-    if min_number:
-        if len(actual) < min_number:
-            return MinNumberNotMatched(actual, expected, min_number)
 
 
 def prepare(actual, expected, sanitized_keys):
@@ -171,7 +82,10 @@ def prepare(actual, expected, sanitized_keys):
         if 'method' in tree:
             tree['method'] = apply_safe(lambda x: x.lower(), tree['method'])
         if 'headers' in tree:
-            tree['headers'] = apply_safe(lambda x: dict((k.lower(), v) for k, v in x.items()), tree['headers'])
+            tree['headers'] = apply_safe(
+                lambda x: dict((k.lower(), format_header_value(v)) for k, v in x.items()),
+                tree['headers'],
+            )
         if 'matchingRules' in tree:
             lower_header = lambda x: x.lower() if x.startswith('$.headers') else x
             tree['matchingRules'] = apply_safe(
@@ -184,30 +98,18 @@ def prepare(actual, expected, sanitized_keys):
                 tree['query'],
             )
 
-def walk(tree, func=lambda x: None):
-    """
-        Walk a tree until all leaves are reached once.
-
-        A function can be applied on all leaves through the optional argument ``func``
-    """
-    if type(tree) == dict:
-        for key, value in tree.items():
-            walk(value, func)
-    elif type(tree) in (list, tuple, set):
-        for el in tree:
-            walk(el, func)
-    else:
-        func(tree)
-
 
 def sanitize_empty_keys(actual, expected, keys):
     for key in keys:
         expected_value, actual_value = expected.get(key, Empty), actual.get(key, Empty)
         if expected_value is Empty:
-            expected[key] = Empty
-            actual[key] = Empty  # No check at all if key is not in expected
+            actual.pop(key, None)  # No check at all if key is not in expected
         elif actual_value in (None, Empty) and expected_value is None:
             actual[key] = None
+
+
+def format_header_value(header_value):
+    return ','.join(value.strip(' ') for value in header_value.split(','))
 
 
 def walk_and_assert(actual, expected, rules=None, paths=None, ignore_extra_keys=True):
@@ -275,30 +177,33 @@ def walk_and_assert(actual, expected, rules=None, paths=None, ignore_extra_keys=
                 ignore_extra_keys=ignore_extra_keys
             ))
 
-    elif not checked_rules:
-        # no rule matching => default to literal matching
-        diff_tree = expected if actual == expected else Difference(actual, expected)
+    else:
+        if not checked_rules and actual != expected:
+            # no rule matching => default to literal matching
+            diff_tree = Difference(actual, expected)
+        else:
+            diff_tree = actual
 
     return diff_tree
 
 
-def request_checker(actual, expected):
-    prepare(actual, expected, sanitized_keys=('headers', 'query', 'body'))
-    rules = expected.pop('matchingRules', {})
-    ignore_extra_keys = ('headers',)
-    diff_tree = {}
-    for key in ('method', 'path', 'query', 'headers', 'body'):
-        diff_tree[key] = walk_and_assert(
-            actual[key],
-            expected[key],
-            rules=rules,
-            paths=('$.%s' % key,),
-            ignore_extra_keys=key in ignore_extra_keys,
-        )
+def check_rule(rule, actual, expected):
+    if not rule:
+        return
 
-    errors = []
-    build_trees_from_diff(diff_tree, errors)
-    return not errors
+    match = rule.get('match')
+    if match == 'type':
+        if type(actual) != type(expected):
+            return TypeNotMatched(actual, expected)
+    elif match == 'regex':
+        regex = rule['regex']
+        if not re.match(regex, actual):
+            return RegexNotMatched(actual, regex)
+
+    min_number = rule.get('min')
+    if min_number:
+        if len(actual) < min_number:
+            return MinNumberNotMatched(actual, expected, min_number)
 
 
 def build_trees_from_diff(diff, errors):
@@ -323,6 +228,25 @@ def build_trees_from_diff(diff, errors):
     return actual, expected
 
 
+def request_checker(actual, expected):
+    prepare(actual, expected, sanitized_keys=('headers', 'query', 'body'))
+    rules = expected.pop('matchingRules', {})
+    ignore_extra_keys = ('headers',)
+    diff_tree = {}
+    for key in ('method', 'path', 'query', 'headers', 'body'):
+        diff_tree[key] = walk_and_assert(
+            actual.get(key, None),
+            expected.get(key, None),
+            rules=rules,
+            paths=('$.%s' % key,),
+            ignore_extra_keys=key in ignore_extra_keys,
+        )
+
+    errors = []
+    print build_trees_from_diff(diff_tree, errors)
+    return not errors
+
+
 def response_checker(actual, expected):
     prepare(actual, expected, sanitized_keys=('headers', 'status', 'body'))
     rules = expected.pop('matchingRules', {})
@@ -330,16 +254,33 @@ def response_checker(actual, expected):
     diff_tree = {}
     for key in ('status', 'headers', 'body'):
         diff_tree[key] = walk_and_assert(
-            actual[key],
-            expected[key],
+            actual.get(key, None),
+            expected.get(key, None),
             rules=rules,
             paths=('$.%s' % key,),
             ignore_extra_keys=key in ignore_extra_keys,
         )
 
     errors = []
-    build_trees_from_diff(diff_tree, errors)
+    tree1, tree2 = build_trees_from_diff(diff_tree, errors)
+    format_diff(tree1, tree2)
     return not errors
+
+
+def format_diff(tree1, tree2):
+    def prettify(x):
+        added_re = re.compile('^([+] [^\n]*)\n$')
+        removed_re = re.compile('^([-] [^\n]*)\n$')
+        ret = re.sub(added_re, r'\033[1;32m\1\n\033[0;m', x)
+        if ret == x:
+            ret = re.sub(removed_re, r'\033[1;31m\1\n\033[0;m', x)
+        return ret
+    keepends = True
+    lines = difflib.unified_diff(
+        (json.dumps(tree1, sort_keys=True, indent=4) + '\n').splitlines(keepends),
+        (json.dumps(tree2, sort_keys=True, indent=4) + '\n').splitlines(keepends),
+    )
+    sys.stdout.writelines([prettify(line) for line in lines])
 
 
 def check_file(file_, checker):
