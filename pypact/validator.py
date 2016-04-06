@@ -113,9 +113,69 @@ def compare(actual, expected, paths, ignore_extra_keys):
     pass
 
 
-def _compare_dicts(actual, expected, paths, ignore_extra_keys):
+def test_regex():
+    paths = [
+        ('$', 2),
+        ('$.body', 4),
+        ('$.body.item1', 8),
+        ('$.body.item2', 0),
+        ('$.header.item1', 0),
+        ('$.body.item1.level', 16),
+        ('$.body.item1.level[1]', 32),
+        ('$.body.item1.level[1].id', 64),
+        ('$.body.item1.level[1].name', 0),
+        ('$.body.item1.level[2]', 0),
+        ('$.body.item1.level[2].id', 0),
+        ('$.body.item1.level[*].id', 32),
+        ('$.body.*.level[*].id', 16),
+    ]
+    for path, weight in paths:
+        path = jsonpath_rw.parse(path)
+        try:
+            match = next(el for el in path.find(
+                {"body":
+                    {
+                      "item1": {
+                        "level": [
+                          {
+                            "id": 101
+                          },
+                          {
+                            "id": 102
+                          },
+                        ]
+                      }
+                  }
+                }
+            ))
+        except StopIteration:
+            match = None
+        weight_calc = path_weight(path, match)
+        print weight_calc, weight
+        assert weight_calc == weight
+
+
+def path_weight(path, match):
+    if match is None:
+        return 0
+    ret = 2
+    while hasattr(path, 'left'):
+        if isinstance(path.right, jsonpath_rw.Index):
+            ret *= 2
+        elif isinstance(path.right, jsonpath_rw.Slice):
+            if path.right.start is not None or path.right.end is not None:
+                print path.right.start, path.right.end
+                ret *= 2
+        elif isinstance(path.right, jsonpath_rw.Fields):
+            if set(path.right.fields) & set(match.path.fields):
+                ret *= 2
+        path = path.left
+        match = match.context
+    return ret
+
+
+def _compare_dicts(actual, expected, path, matchers, ignore_extra_keys):
     diff_tree = {}
-    next_paths = tuple('%s.*' % path for path in paths)
     for key, expected_value in expected.items():
         if key not in actual:
             diff_tree[key] = Difference(KeyNotFound, expected_value)
@@ -124,18 +184,55 @@ def _compare_dicts(actual, expected, paths, ignore_extra_keys):
             diff_tree[key] = build_diff_tree(
                 actual_value,
                 expected_value,
-                rules=rules,
-                paths=(
-                    next_paths +
-                    tuple('%s.%s' % (path, key) for path in paths) +  # dot notation
-                    tuple("%s['%s']" % (path, key) for path in paths)  # bracket notation
-                ),
+                path='%s.%s' % (path, key),
+                matchers=matchers,
                 ignore_extra_keys=ignore_extra_keys,
             )
     if not ignore_extra_keys:
         unexpected_keys = set(actual.keys()) - set(expected.keys())
         for key in unexpected_keys:
             diff_tree[key] = Difference(actual[key], UnexpectedKey)
+    return diff_tree
+
+
+def _compare_lists(actual, expected, path, matchers, ignore_extra_keys):
+    diff_tree = []
+    max_length = max(len(actual), len(expected))
+    for i in xrange(max_length):
+        next_path = '%s[%s]' % (path, i)
+        actual_value = actual[i] if i < len(actual) else IndexNotFound
+        if i < len(expected):
+            expected_value = expected[i]
+        else:
+            if expected and get_best_matcher(matchers, next_path):
+                expected_value = expected[0]
+            else:
+                expected_value = UnexpectedIndex
+        diff_tree.append(
+            build_diff_tree(
+                actual_value,
+                expected_value,
+                matchers=matchers,
+                path=next_path,
+                ignore_extra_keys=ignore_extra_keys,
+            )
+        )
+    return diff_tree
+
+
+class EqualityMatcher(object):
+    def __init__(self, expected):
+        self.expected = expected
+
+    def match(self, value):
+        if self.expected == value:
+            return value
+        return Difference(value, self.expected)
+
+
+def _compare_values(actual, expected, path, matchers, ignore_extra_keys):
+    matcher = get_best_matcher(matchers, path) or EqualityMatcher(expected)
+    return matcher.match(actual)
 
 
 def build_diff_tree(actual, expected, rules=None, paths=None, ignore_extra_keys=True):
