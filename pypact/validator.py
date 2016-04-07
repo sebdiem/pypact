@@ -1,3 +1,5 @@
+# -*- coding: utf-8 -*-
+
 from __future__ import unicode_literals
 
 import difflib
@@ -181,6 +183,80 @@ def _compare_lists(actual, expected, path, matchers, ignore_extra_keys):
     return diff_tree
 
 
+class PathMatcher(object):
+    def __init__(self, regex, weight):
+        self.regex = re.compile(regex)
+        self.weight = weight
+
+    def match(self, path):
+        return bool(re.match(self.regex, path))
+
+    @classmethod
+    def from_jsonpath(cls, jsonpath):
+        # Use some regex to build a regex from a jsonpath… inception
+        # Some rules applying to jsonpath:
+        #   it must start with a dollar sign
+        #   ] and ' characters are not allowed in keys between brackets
+        #   [ and ] characters are not allowed in keys between dots
+        assert jsonpath.startswith('$')
+        jsonpath = '.%s' % jsonpath  # pre-process so that the $ character can be handled like any other
+
+        match_dot_re = r"(?<=\.)(?P<dot>[^.\[\]]*)"
+        match_bracket_re = r"(?<=\[)(?P<bracket>(?P<quote>')?[^'\]]+(?(quote)'))\]"
+        jsonpath_re = re.compile(r"%s|%s" % (match_dot_re, match_bracket_re))
+
+        regex = r''
+        weight = 1
+        split = re.findall(jsonpath_re, jsonpath)
+        for i, (dot_match, bracket_match, _quote) in enumerate(split):
+            # Either dot_match or bracket_match is empty (or both)
+            if not (dot_match or bracket_match):
+                regex += r"\[\'[^']*\'\]"
+            elif dot_match:
+                if dot_match == '*':
+                    if i == len(split) - 1:  # ending star
+                        regex += r".*"
+                    else:
+                        regex += r"\[\'.*\'\]"
+                else:
+                    regex += r"\[\'%s\'\]" % re.escape(dot_match)
+            else:  # bracket_match is non empty
+                if bracket_match == '*':
+                    regex += r"\[[0-9]+\]"
+                else:
+                    if not bracket_match.startswith("'"):
+                        try:
+                            int(bracket_match)
+                        except ValueError:
+                            raise
+                    regex += r"\[%s\]" % re.escape(bracket_match)
+        return cls(regex, weight)
+
+
+def test_regex():
+    path = "$.toto.titi['tutu']"
+    regex = PathMatcher.from_jsonpath(path)
+    assert regex.match("['$']['toto']['titi']['tutu']")
+
+    path = "$.toto.titi['tutu'].*"
+    regex = PathMatcher.from_jsonpath(path)
+    assert regex.match("['$']['toto']['titi']['tutu']['cucu']['kiki']")
+
+    path = "$.toto.titi[*].*"
+    regex = PathMatcher.from_jsonpath(path)
+    assert regex.match("['$']['toto']['titi'][2]['cucu']['kiki']")
+    assert not regex.match("['$']['toto']['titi']['tata']['cucu']['kiki']")
+
+    path = "$.toto.titi.*.toto[0]"
+    regex = PathMatcher.from_jsonpath(path)
+    assert regex.match("['$']['toto']['titi']['cucu']['toto'][0]")
+    assert not regex.match("['$']['toto']['titi']['cucu']['toto'][1]")
+
+
+def path_weight(regex, path):
+    pass
+
+
 def get_best_matcher(matchers, path):
     pass
 
@@ -349,23 +425,24 @@ def check_file(file_, checker):
 
 
 if __name__ == '__main__':
-    failed = {'request': 0, 'response': 0}
-    path = sys.argv[1] if len(sys.argv) > 1 else None
-    if path:
-        request_or_response = 'request' if os.path.join('testcases', 'request') in path else 'response'
-        checker = {'request': request_checker, 'response': response_checker}[request_or_response]
-        check_file(path, checker)
-        sys.exit(0)
-    for root, dirs, files in os.walk('/Users/Seb/temp/pact-specification/testcases'):
-        for file_ in files:
-            if file_.split('.')[-1] == 'json':
-                path = os.path.join(root, file_)
-                request_or_response = 'request' if os.path.join('testcases', 'request') in path else 'response'
-                checker = {'request': request_checker, 'response': response_checker}[request_or_response]
-                if not check_file(path, checker):
-                    failed[request_or_response] += 1
-    if any(failed.values()):
-        for k, v in failed.items():
-            print '%s %ss failed' % (v, k)
-    else:
-        print 'Success'
+    #failed = {'request': 0, 'response': 0}
+    #path = sys.argv[1] if len(sys.argv) > 1 else None
+    #if path:
+    #    request_or_response = 'request' if os.path.join('testcases', 'request') in path else 'response'
+    #    checker = {'request': request_checker, 'response': response_checker}[request_or_response]
+    #    check_file(path, checker)
+    #    sys.exit(0)
+    #for root, dirs, files in os.walk('/Users/Seb/temp/pact-specification/testcases'):
+    #    for file_ in files:
+    #        if file_.split('.')[-1] == 'json':
+    #            path = os.path.join(root, file_)
+    #            request_or_response = 'request' if os.path.join('testcases', 'request') in path else 'response'
+    #            checker = {'request': request_checker, 'response': response_checker}[request_or_response]
+    #            if not check_file(path, checker):
+    #                failed[request_or_response] += 1
+    #if any(failed.values()):
+    #    for k, v in failed.items():
+    #        print '%s %ss failed' % (v, k)
+    #else:
+    #    print 'Success'
+    test_regex()
