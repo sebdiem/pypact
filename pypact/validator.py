@@ -1,14 +1,10 @@
 from __future__ import unicode_literals
 
-import collections
-import copy
 import difflib
-import inspect
 import json
 import os
 import re
 import sys
-import unittest
 import urlparse
 
 class BaseError(object):
@@ -73,7 +69,7 @@ def prepare(actual, expected, sanitized_keys):
     """
     def sanitize_empty_keys(actual, expected, keys):
         for key in keys:
-            expected_value, actual_value = expected.get(key, Empty), actual.get(key, Empty)
+            expected_value, _actual_value = expected.get(key, Empty), actual.get(key, Empty)
             if expected_value is Empty:
                 actual.pop(key, None)  # No check at all if key is not in expected
 
@@ -109,69 +105,33 @@ def prepare(actual, expected, sanitized_keys):
             )
 
 
-def compare(actual, expected, paths, ignore_extra_keys):
-    pass
+def compare(actual, expected, path=None, matchers=None, ignore_extra_keys=True):
+    """
+        Build the diff tree of the two trees given as input.
 
+        The resulting tree contains the same elements as ``actual`` and ``expected``
+        when they match, and a Difference object when they don't.
 
-def test_regex():
-    paths = [
-        ('$', 2),
-        ('$.body', 4),
-        ('$.body.item1', 8),
-        ('$.body.item2', 0),
-        ('$.header.item1', 0),
-        ('$.body.item1.level', 16),
-        ('$.body.item1.level[1]', 32),
-        ('$.body.item1.level[1].id', 64),
-        ('$.body.item1.level[1].name', 0),
-        ('$.body.item1.level[2]', 0),
-        ('$.body.item1.level[2].id', 0),
-        ('$.body.item1.level[*].id', 32),
-        ('$.body.*.level[*].id', 16),
-    ]
-    for path, weight in paths:
-        path = jsonpath_rw.parse(path)
-        try:
-            match = next(el for el in path.find(
-                {"body":
-                    {
-                      "item1": {
-                        "level": [
-                          {
-                            "id": 101
-                          },
-                          {
-                            "id": 102
-                          },
-                        ]
-                      }
-                  }
-                }
-            ))
-        except StopIteration:
-            match = None
-        weight_calc = path_weight(path, match)
-        print weight_calc, weight
-        assert weight_calc == weight
+        Args:
+            path:
+            matchers:
+            ignore_extra_keys (bool): whether to ignore extra keys in the ``actual`` tree or not
+    """
+    path = path or '$.'
+    matchers = matchers or {}
 
-
-def path_weight(path, match):
-    if match is None:
-        return 0
-    ret = 2
-    while hasattr(path, 'left'):
-        if isinstance(path.right, jsonpath_rw.Index):
-            ret *= 2
-        elif isinstance(path.right, jsonpath_rw.Slice):
-            if path.right.start is not None or path.right.end is not None:
-                print path.right.start, path.right.end
-                ret *= 2
-        elif isinstance(path.right, jsonpath_rw.Fields):
-            if set(path.right.fields) & set(match.path.fields):
-                ret *= 2
-        path = path.left
-        match = match.context
-    return ret
+    if type(expected) == dict:
+        if type(actual) != dict:
+            return TypeNotMatched(actual, expected)
+        return _compare_dicts(actual, expected, path, matchers, ignore_extra_keys)
+    # Do not use collections.Sequence, it also matches strings which must be
+    # treated as tree leaves.
+    elif type(expected) in (list, tuple):
+        if type(actual) not in (list, tuple):
+            return TypeNotMatched(actual, expected)
+        return _compare_lists(actual, expected, path, matchers, ignore_extra_keys)
+    else:
+        return _compare_values(actual, expected, path, matchers, ignore_extra_keys)
 
 
 def _compare_dicts(actual, expected, path, matchers, ignore_extra_keys):
@@ -181,7 +141,7 @@ def _compare_dicts(actual, expected, path, matchers, ignore_extra_keys):
             diff_tree[key] = Difference(KeyNotFound, expected_value)
         else:
             actual_value = actual[key]
-            diff_tree[key] = build_diff_tree(
+            diff_tree[key] = compare(
                 actual_value,
                 expected_value,
                 path='%s.%s' % (path, key),
@@ -198,6 +158,7 @@ def _compare_dicts(actual, expected, path, matchers, ignore_extra_keys):
 def _compare_lists(actual, expected, path, matchers, ignore_extra_keys):
     diff_tree = []
     max_length = max(len(actual), len(expected))
+    # TODO add min matcher
     for i in xrange(max_length):
         next_path = '%s[%s]' % (path, i)
         actual_value = actual[i] if i < len(actual) else IndexNotFound
@@ -209,7 +170,7 @@ def _compare_lists(actual, expected, path, matchers, ignore_extra_keys):
             else:
                 expected_value = UnexpectedIndex
         diff_tree.append(
-            build_diff_tree(
+            compare(
                 actual_value,
                 expected_value,
                 matchers=matchers,
@@ -220,7 +181,16 @@ def _compare_lists(actual, expected, path, matchers, ignore_extra_keys):
     return diff_tree
 
 
-class EqualityMatcher(object):
+def get_best_matcher(matchers, path):
+    pass
+
+
+class Matcher(object):
+    def match(self, value):
+        raise NotImplementedError
+
+
+class EqualityMatcher(Matcher):
     def __init__(self, expected):
         self.expected = expected
 
@@ -230,110 +200,19 @@ class EqualityMatcher(object):
         return Difference(value, self.expected)
 
 
+class RegexMatcher(Matcher):
+    def __init__(self, regex):
+        self.regex = re.compile(regex)
+
+    def match(self, value):
+        if not re.match(self.regex, value):
+            return RegexNotMatched(value, self.regex)
+        return value
+
+
 def _compare_values(actual, expected, path, matchers, ignore_extra_keys):
     matcher = get_best_matcher(matchers, path) or EqualityMatcher(expected)
     return matcher.match(actual)
-
-
-def build_diff_tree(actual, expected, rules=None, paths=None, ignore_extra_keys=True):
-    """
-        Build the diff tree of the two trees given as input.
-
-        The resulting tree contains the same elements as ``actual`` and ``expected``
-        when they match, and a Difference object when they don't.
-
-        Args:
-            rules (dict): a dictionnary of {path: rule} to specify the checks performed on a given path of the tree.
-                If no rule exists for a path, exact value matching is performed.
-            paths (collection of str): the references to the current paths inside the tree
-            ignore_extra_keys (bool): whether to ignore extra keys in the ``actual`` tree or not
-    """
-    paths = paths or ('$.',)
-    rules = rules or {}
-    diff_tree = None
-
-    checked_rules = [rules[path] for path in paths if path in rules]
-    for rule in checked_rules:
-        diff = check_rule(rule, actual, expected)
-        if diff:
-            return diff
-
-    if type(expected) == dict:
-        if type(actual) != dict:
-            return TypeNotMatched(actual, expected)
-
-        diff_tree = {}
-        next_paths = tuple('%s.*' % path for path in paths)
-        for key, expected_value in expected.items():
-            if key not in actual:
-                diff_tree[key] = Difference(KeyNotFound, expected_value)
-            else:
-                actual_value = actual[key]
-                diff_tree[key] = build_diff_tree(
-                    actual_value,
-                    expected_value,
-                    rules=rules,
-                    paths=(
-                        next_paths +
-                        tuple('%s.%s' % (path, key) for path in paths) +  # dot notation
-                        tuple("%s['%s']" % (path, key) for path in paths)  # bracket notation
-                    ),
-                    ignore_extra_keys=ignore_extra_keys,
-                )
-        if not ignore_extra_keys:
-            unexpected_keys = set(actual.keys()) - set(expected.keys())
-            for key in unexpected_keys:
-                diff_tree[key] = Difference(actual[key], UnexpectedKey)
-
-    # Do not use collections.Sequence, it also matches strings which must be
-    # treated as tree leaves.
-    elif type(expected) in (list, tuple):
-        if type(actual) not in (list, tuple):
-            return TypeNotMatched(actual, expected)
-
-        diff_tree = []
-        next_paths = tuple('%s[*]' % path for path in paths)
-        for i, expected_value in enumerate(expected):
-            if i >= len(actual):
-                diff_tree.append(Difference(IndexNotFound, expected_value))
-            else:
-                actual_value = actual[i]
-                diff_tree.append(
-                    build_diff_tree(
-                        actual_value,
-                        expected_value,
-                        rules=rules,
-                        paths=next_paths + tuple('%s[%s]' % (path, i) for path in paths),
-                        ignore_extra_keys=ignore_extra_keys,
-                    )
-                )
-        for i, actual_value in enumerate(actual[len(expected):], len(expected)):
-            next_paths = next_paths + tuple('%s[%s]' % (path, i) for path in paths)
-            next_rules = [rules[path] for next_path in next_paths for path in rules if path.startswith(next_path)]
-            if expected and any(rule.get('match') for rule in next_rules):
-                # if only type matching is required on the list elements,
-                # artificially populate the expected tree to ease further type comparisons.
-                expected_value = expected[-1]
-            else:
-                expected_value = UnexpectedIndex
-            diff_tree.append(
-                build_diff_tree(
-                    actual_value,
-                    expected_value,
-                    rules=rules,
-                    paths=next_paths,
-                    ignore_extra_keys=ignore_extra_keys,
-                )
-            )
-
-    else:
-        # if no rule was found => default to literal matching
-        if not checked_rules and actual != expected:
-            diff_tree = Difference(actual, expected)
-        else:
-            diff_tree = actual
-
-    return diff_tree
 
 
 def check_rule(rule, actual, expected):
@@ -414,14 +293,14 @@ def _checker(actual, expected, keys, sanitized_keys, ignore_extra_keys):
         Travel actual and expected trees and search for differences.
     """
     prepare(actual, expected, sanitized_keys=sanitized_keys)
-    rules = expected.pop('matchingRules', {})
+    matchers = expected.pop('matchingRules', {})
     diff_tree = {}
     for key in keys:
-        diff_tree[key] = build_diff_tree(
+        diff_tree[key] = compare(
             actual.get(key, None),
             expected.get(key, None),
-            rules=rules,
-            paths=('$.%s' % key,),
+            path='$.%s' % key,
+            matchers=matchers,
             ignore_extra_keys=key in ignore_extra_keys,
         )
 
