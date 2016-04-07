@@ -1,3 +1,5 @@
+import json
+
 from .exceptions import PyPactServiceException
 
 
@@ -48,6 +50,31 @@ class MockService(object):
                 "Cannot end already ended MockService.")
 
         self.stopped = True
+
+    def publish(self, filename=None):
+        pact = json.dumps({
+            'provider': {
+                'name': self.provider,
+            },
+            'consumer': {
+                'name': self.provider,
+            },
+            'interactions': self.interactions,
+            'metadata': {
+                'pact-specification': {
+                    'version': '1.0.0',
+                },
+                'pypact': {
+                    'version': '0.1.0',
+                }
+            }
+        })
+
+        if filename is not None:
+            with open(filename, 'w+') as f:
+                f.write(pact)
+
+        return pact
 
     def __enter__(self):
         self.start()
