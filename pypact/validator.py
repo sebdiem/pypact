@@ -4,10 +4,15 @@ from __future__ import unicode_literals
 
 import difflib
 import json
+import logging
 import os
 import re
 import sys
 import urlparse
+
+
+logger = logging.getLogger(__name__)
+
 
 class BaseError(object):
     pass
@@ -39,16 +44,17 @@ class RegexNotMatched(Difference):
 class TypeNotMatched(Difference):
     pass
 
-class MinNumberNotMatched(BaseError):
-    def __init__(self, actual, expected, min_number):
+class NumberNotMatched(BaseError):
+    def __init__(self, actual, expected, minimum=None, maximum=None):
         self.actual = actual
         self.expected = expected
-        self.min_number = min_number
+        self.minimum = minimum
+        self.maximum = maximum
 
     def split(self):
-        actual = self.actual + [IndexNotFound.__name__] * (self.min_number - len(self.actual))
+        actual = self.actual + [IndexNotFound.__name__] * (self.minimum - len(self.actual))
         default_value = self.expected[-1] if self.expected else UnexpectedIndex
-        expected = self.expected + [default_value] * (self.min_number - len(self.expected))
+        expected = self.expected + [default_value] * (self.minimum - len(self.expected))
         return actual, expected
 
 
@@ -119,8 +125,8 @@ def compare(actual, expected, path=None, matchers=None, ignore_extra_keys=True):
             matchers:
             ignore_extra_keys (bool): whether to ignore extra keys in the ``actual`` tree or not
     """
-    path = path or '$.'
-    matchers = matchers or {}
+    path = path or "['$']"
+    matchers = matchers or []
 
     if type(expected) == dict:
         if type(actual) != dict:
@@ -133,7 +139,7 @@ def compare(actual, expected, path=None, matchers=None, ignore_extra_keys=True):
             return TypeNotMatched(actual, expected)
         return _compare_lists(actual, expected, path, matchers, ignore_extra_keys)
     else:
-        return _compare_values(actual, expected, path, matchers, ignore_extra_keys)
+        return _compare_values(actual, expected, path, matchers)
 
 
 def _compare_dicts(actual, expected, path, matchers, ignore_extra_keys):
@@ -146,7 +152,7 @@ def _compare_dicts(actual, expected, path, matchers, ignore_extra_keys):
             diff_tree[key] = compare(
                 actual_value,
                 expected_value,
-                path='%s.%s' % (path, key),
+                path=append_key_to_path(path, key),
                 matchers=matchers,
                 ignore_extra_keys=ignore_extra_keys,
             )
@@ -160,9 +166,14 @@ def _compare_dicts(actual, expected, path, matchers, ignore_extra_keys):
 def _compare_lists(actual, expected, path, matchers, ignore_extra_keys):
     diff_tree = []
     max_length = max(len(actual), len(expected))
-    # TODO add min matcher
+    value_matcher = get_best_matcher(matchers, path)
+    if value_matcher:
+        diff = value_matcher.diff(actual, expected)
+        if diff:
+            return diff
+
     for i in xrange(max_length):
-        next_path = '%s[%s]' % (path, i)
+        next_path = append_index_to_path(path, i)
         actual_value = actual[i] if i < len(actual) else IndexNotFound
         if i < len(expected):
             expected_value = expected[i]
@@ -183,6 +194,11 @@ def _compare_lists(actual, expected, path, matchers, ignore_extra_keys):
     return diff_tree
 
 
+def _compare_values(actual, expected, path, matchers):
+    matcher = get_best_matcher(matchers, path) or EqualityMatcher()
+    return matcher.diff(actual, expected) or actual
+
+
 class PathMatcher(object):
     def __init__(self, regex, weight):
         self._regex = re.compile(regex)
@@ -196,12 +212,15 @@ class PathMatcher(object):
 
     @classmethod
     def from_jsonpath(cls, jsonpath):
-        # Use some regex to build a regex from a jsonpath… inception
-        # Some rules applying to jsonpath:
-        #   it must start with a dollar sign
-        #   ] and ' characters are not allowed in keys between brackets
-        #   [ and ] characters are not allowed in keys between dots
-        #   [] and [*] match any list index
+        """
+            Use some regex to build a regex from a jsonpath… inception
+
+            Some rules applying to ``jsonpath``:
+              it must start with a dollar sign
+              ] and ' characters are not allowed in keys between brackets
+              [ and ] characters are not allowed in keys between dots
+              [] and [*] match any list index
+        """
         assert jsonpath.startswith('$')
         jsonpath = '.%s' % jsonpath  # pre-process so that the $ character can be handled like any other
 
@@ -244,6 +263,7 @@ class PathMatcher(object):
                     else:
                         regex += r"\[\'%s\'\]" % re.escape(dot_match)
                         weight *= exact_factor
+        regex += r"$"
         return cls(regex, weight)
 
 
@@ -271,83 +291,93 @@ def test_regex():
 
 def test_weight():
     test_cases = [
-        ('$', 2),
-        ('$.body', 4),
-        ('$.body.item1', 8),
-        ('$.body.item2', 0),
-        ('$.header.item1', 0),
-        ('$.body.item1.level', 16),
-        ('$.body.item1.level[1]', 32),
-        ('$.body.item1.level[1].id', 64),
-        ('$.body.item1.level[1].name', 0),
-        ('$.body.item1.level[2]', 0),
+        ('$.*', 2),
+        ('$.body.*', 4),
+        ('$.body.item1.*', 8),
+        ('$.body.item2.*', 0),
+        ('$.header.item1.*', 0),
+        ('$.body.item1.level.*', 16),
+        ('$.body.item1.level[1].*', 32),
+        ('$.body.item1.level[1].id.*', 64),
+        ('$.body.item1.level[1].name.*', 0),
+        ('$.body.item1.level[2].*', 0),
         ('$.body.item1.level[2].id', 0),
         ('$.body.item1.level[*].id', 32),
-        ('$.body..level[].id', 16),
+        ('$.body..level[].id.*', 16),
     ]
     test_path = "['$']['body']['item1']['level'][1]['id']"
     for path, weight in test_cases:
         assert PathMatcher.from_jsonpath(path).weight(test_path) == weight
 
 
-def path_weight(regex, path):
-    pass
-
-
 def get_best_matcher(matchers, path):
-    pass
+    """
+        Get the ValueMatcher that best matches path
+        Args:
+            matchers, list: a list of (PathMatcher, ValueMatcher)
+            path, str: the path for which to get the ValueMatcher
+
+        Return: ValueMatcher or None
+    """
+    if matchers:
+        path_matcher, value_matcher = max(matchers, key=lambda x: x[0].weight(path))
+        if path_matcher.weight(path):
+            return value_matcher
 
 
-class Matcher(object):
-    def match(self, value):
+class ValueMatcher(object):
+    def diff(self, actual, expected):
         raise NotImplementedError
 
+    @classmethod
+    def from_dict(cls, d):
+        if d.get('match'):
+            match = d['match']
+            if match == 'regex':
+                return RegexMatcher(d['regex'])
+            if match == 'type':
+                if d.get('min') or d.get('max'):
+                    return MinMaxMatcher(d.get('min'), d.get('max'))
+                return TypeMatcher()
+        elif d.get('min') or d.get('max'):
+            return MinMaxMatcher(d.get('min'), d.get('max'))
+        logger.debug('Unrecognised matcher %s, defaulting to equality matching', d)
+        return EqualityMatcher()
 
-class EqualityMatcher(Matcher):
-    def __init__(self, expected):
-        self.expected = expected
 
-    def match(self, value):
-        if self.expected == value:
-            return value
-        return Difference(value, self.expected)
+class EqualityMatcher(ValueMatcher):
+    def diff(self, actual, expected):
+        if expected != actual:
+            return Difference(actual, expected)
 
 
-class RegexMatcher(Matcher):
+class RegexMatcher(ValueMatcher):
     def __init__(self, regex):
         self.regex = re.compile(regex)
 
-    def match(self, value):
-        if not re.match(self.regex, value):
-            return RegexNotMatched(value, self.regex)
-        return value
+    def diff(self, actual, expected=None):
+        if not re.match(self.regex, actual):
+            return RegexNotMatched(actual, self.regex.pattern)
 
 
-def _compare_values(actual, expected, path, matchers, ignore_extra_keys):
-    matcher = get_best_matcher(matchers, path) or EqualityMatcher(expected)
-    return matcher.match(actual)
+class MinMaxMatcher(ValueMatcher):
+    def __init__(self, minimum=None, maximum=None):
+        if minimum and maximum:
+            assert minimum <= maximum
+        self.minimum = minimum
+        self.maximum = maximum
+
+    def diff(self, actual, expected):
+        if self.minimum and len(actual) < self.minimum:
+            return NumberNotMatched(actual, expected, minimum=self.minimum)
+        if self.maximum and len(actual) > self.maximum:
+            return NumberNotMatched(actual, expected, maximum=self.maximum)
 
 
-def check_rule(rule, actual, expected):
-    """
-        Check that ``actual`` respects ``rule`` for the expected value.
-    """
-    if not rule:
-        return
-
-    match = rule.get('match')
-    if match == 'type':
-        if type(actual) != type(expected):
+class TypeMatcher(ValueMatcher):
+    def diff(self, actual, expected):
+        if type(expected) != type(actual):
             return TypeNotMatched(actual, expected)
-    elif match == 'regex':
-        regex = rule['regex']
-        if not re.match(regex, actual):
-            return RegexNotMatched(actual, regex)
-
-    min_number = rule.get('min')
-    if min_number:
-        if len(actual) < min_number:
-            return MinNumberNotMatched(actual, expected, min_number)
 
 
 def rebuild_trees_from_diff(diff, errors):
@@ -401,18 +431,34 @@ def response_checker(actual, expected):
     return _checker(actual, expected, keys, sanitized_keys, ignore_extra_keys)
 
 
+def append_key_to_path(path, key):
+    # use bracket notation because this is what PathParser can handle
+    if path is None:
+        path = "['$']"
+    return "%s['%s']" % (path, key)
+
+
+def append_index_to_path(path, index):
+    if path is None:
+        path = "['$']"
+    return "%s[%s]" % (path, index)
+
+
 def _checker(actual, expected, keys, sanitized_keys, ignore_extra_keys):
     """
         Travel actual and expected trees and search for differences.
     """
     prepare(actual, expected, sanitized_keys=sanitized_keys)
-    matchers = expected.pop('matchingRules', {})
+    matchers = [
+        (PathMatcher.from_jsonpath(path), ValueMatcher.from_dict(rule))
+        for path, rule in expected.pop('matchingRules', {}).items()
+    ]
     diff_tree = {}
     for key in keys:
         diff_tree[key] = compare(
             actual.get(key, None),
             expected.get(key, None),
-            path='$.%s' % key,
+            path=append_key_to_path(path=None, key=key),
             matchers=matchers,
             ignore_extra_keys=key in ignore_extra_keys,
         )
@@ -462,24 +508,24 @@ def check_file(file_, checker):
 
 
 if __name__ == '__main__':
-    #failed = {'request': 0, 'response': 0}
-    #path = sys.argv[1] if len(sys.argv) > 1 else None
-    #if path:
-    #    request_or_response = 'request' if os.path.join('testcases', 'request') in path else 'response'
-    #    checker = {'request': request_checker, 'response': response_checker}[request_or_response]
-    #    check_file(path, checker)
-    #    sys.exit(0)
-    #for root, dirs, files in os.walk('/Users/Seb/temp/pact-specification/testcases'):
-    #    for file_ in files:
-    #        if file_.split('.')[-1] == 'json':
-    #            path = os.path.join(root, file_)
-    #            request_or_response = 'request' if os.path.join('testcases', 'request') in path else 'response'
-    #            checker = {'request': request_checker, 'response': response_checker}[request_or_response]
-    #            if not check_file(path, checker):
-    #                failed[request_or_response] += 1
-    #if any(failed.values()):
-    #    for k, v in failed.items():
-    #        print '%s %ss failed' % (v, k)
-    #else:
-    #    print 'Success'
+    failed = {'request': 0, 'response': 0}
+    path = sys.argv[1] if len(sys.argv) > 1 else None
+    if path:
+        request_or_response = 'request' if os.path.join('testcases', 'request') in path else 'response'
+        checker = {'request': request_checker, 'response': response_checker}[request_or_response]
+        check_file(path, checker)
+        sys.exit(0)
+    for root, dirs, files in os.walk('/Users/Seb/temp/pact-specification/testcases'):
+        for file_ in files:
+            if file_.split('.')[-1] == 'json':
+                path = os.path.join(root, file_)
+                request_or_response = 'request' if os.path.join('testcases', 'request') in path else 'response'
+                checker = {'request': request_checker, 'response': response_checker}[request_or_response]
+                if not check_file(path, checker):
+                    failed[request_or_response] += 1
+    if any(failed.values()):
+        for k, v in failed.items():
+            print '%s %ss failed' % (v, k)
+    else:
+        print 'Success'
     test_regex()
