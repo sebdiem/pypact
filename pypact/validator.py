@@ -185,11 +185,14 @@ def _compare_lists(actual, expected, path, matchers, ignore_extra_keys):
 
 class PathMatcher(object):
     def __init__(self, regex, weight):
-        self.regex = re.compile(regex)
-        self.weight = weight
+        self._regex = re.compile(regex)
+        self._weight = weight
 
     def match(self, path):
-        return bool(re.match(self.regex, path))
+        return bool(re.match(self._regex, path))
+
+    def weight(self, path):
+        return self._weight if self.match(path) else 0
 
     @classmethod
     def from_jsonpath(cls, jsonpath):
@@ -198,31 +201,27 @@ class PathMatcher(object):
         #   it must start with a dollar sign
         #   ] and ' characters are not allowed in keys between brackets
         #   [ and ] characters are not allowed in keys between dots
+        #   [] and [*] match any list index
         assert jsonpath.startswith('$')
         jsonpath = '.%s' % jsonpath  # pre-process so that the $ character can be handled like any other
 
         match_dot_re = r"(?<=\.)(?P<dot>[^.\[\]]*)"
-        match_bracket_re = r"(?<=\[)(?P<bracket>(?P<quote>')?[^'\]]+(?(quote)'))\]"
+        match_bracket_re = r"(?<=\[)(?P<bracket>(?P<quote>')?[^'\]]*(?(quote)')\])"
         jsonpath_re = re.compile(r"%s|%s" % (match_dot_re, match_bracket_re))
 
         regex = r''
         weight = 1
+        star_factor, exact_factor = 1, 2
         split = re.findall(jsonpath_re, jsonpath)
         for i, (dot_match, bracket_match, _quote) in enumerate(split):
-            # Either dot_match or bracket_match is empty (or both)
-            if not (dot_match or bracket_match):
-                regex += r"\[\'[^']*\'\]"
-            elif dot_match:
-                if dot_match == '*':
-                    if i == len(split) - 1:  # ending star
-                        regex += r".*"
-                    else:
-                        regex += r"\[\'.*\'\]"
-                else:
-                    regex += r"\[\'%s\'\]" % re.escape(dot_match)
-            else:  # bracket_match is non empty
-                if bracket_match == '*':
+            if bracket_match:
+                # We kept the final bracket in the group to distinguish between
+                # a dot match and a bracket match. Otherwise both could be
+                # equal to the empty string. Now it's time to remove it.
+                bracket_match = bracket_match[:-1]
+                if bracket_match in ('*', ''):
                     regex += r"\[[0-9]+\]"
+                    weight *= star_factor
                 else:
                     if not bracket_match.startswith("'"):
                         try:
@@ -230,6 +229,21 @@ class PathMatcher(object):
                         except ValueError:
                             raise
                     regex += r"\[%s\]" % re.escape(bracket_match)
+                    weight *= exact_factor
+            else:
+                if not dot_match:
+                    regex += r"\[\'[^']*\'\]"
+                    weight *= star_factor
+                else:
+                    if dot_match == '*':
+                        if i == len(split) - 1:  # ending star
+                            regex += r".*"
+                        else:
+                            regex += r"\[\'.*\'\]"
+                        weight *= star_factor
+                    else:
+                        regex += r"\[\'%s\'\]" % re.escape(dot_match)
+                        weight *= exact_factor
         return cls(regex, weight)
 
 
@@ -251,6 +265,29 @@ def test_regex():
     regex = PathMatcher.from_jsonpath(path)
     assert regex.match("['$']['toto']['titi']['cucu']['toto'][0]")
     assert not regex.match("['$']['toto']['titi']['cucu']['toto'][1]")
+
+    test_weight()
+
+
+def test_weight():
+    test_cases = [
+        ('$', 2),
+        ('$.body', 4),
+        ('$.body.item1', 8),
+        ('$.body.item2', 0),
+        ('$.header.item1', 0),
+        ('$.body.item1.level', 16),
+        ('$.body.item1.level[1]', 32),
+        ('$.body.item1.level[1].id', 64),
+        ('$.body.item1.level[1].name', 0),
+        ('$.body.item1.level[2]', 0),
+        ('$.body.item1.level[2].id', 0),
+        ('$.body.item1.level[*].id', 32),
+        ('$.body..level[].id', 16),
+    ]
+    test_path = "['$']['body']['item1']['level'][1]['id']"
+    for path, weight in test_cases:
+        assert PathMatcher.from_jsonpath(path).weight(test_path) == weight
 
 
 def path_weight(regex, path):
