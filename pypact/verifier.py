@@ -96,12 +96,11 @@ class Provider(object):
                     query=request.get('query', None),
                 )
                 diff = compare(response, interaction['response'])
-                if diff:
+                print diff
+                if not diff:
                     raise AssertionError(diff)
 
 
 def compare(actual, expected):
-    # simple funnction, replace me
-    if actual['status'] != expected['status']:
-        return 'Error %s, %s' % (actual['status'], expected['status'])
-    return ''
+    from .validator import response_checker
+    return response_checker(actual, expected)
