@@ -470,14 +470,14 @@ def _checker(actual, expected, keys, sanitized_keys, ignore_extra_keys):
 
 
 def format_diff(actual, expected, with_color=True):
-    added_re = re.compile('^([+] [^\n]*)\n$')
-    removed_re = re.compile('^([-] [^\n]*)\n$')
+    added_re = re.compile('^([+] [^\n]*\n)$')
+    removed_re = re.compile('^([-] [^\n]*\n)$')
     def colorize(x):
         if not with_color:
             return x
-        ret = re.sub(added_re, r'\033[1;32m\1\n\033[0;m', x)
+        ret = re.sub(added_re, r'\033[1;32m\1\033[0;m', x)
         if ret == x:
-            ret = re.sub(removed_re, r'\033[1;31m\1\n\033[0;m', x)
+            ret = re.sub(removed_re, r'\033[1;31m\1\033[0;m', x)
         return ret
 
     keepends = True
