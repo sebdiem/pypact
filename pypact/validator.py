@@ -238,8 +238,8 @@ def _compare_pacts(actual, expected, keys, sanitized_keys, ignore_extra_keys):
 
 
 def format_diff(actual, expected, with_color=True):
-    added_re = re.compile('^([+] [^\n]*\n)$')
-    removed_re = re.compile('^([-] [^\n]*\n)$')
+    added_re = re.compile('^([+][^+][^\n]*\n)$')
+    removed_re = re.compile('^([-][^-][^\n]*\n)$')
     def colorize(x):
         if not with_color:
             return x

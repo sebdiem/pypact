@@ -1,9 +1,10 @@
+import copy
 import json
 import os
 
 import pytest
 
-from ..validator import compare_requests, compare_responses
+from ..validator import compare_requests, compare_responses, format_diff
 
 
 def spec_test(testcase):
@@ -27,4 +28,38 @@ def test_specification_v2(testcase_v2):
 
 
 def test_diff_formatter():
-    pass
+    actual = {
+        'toto': [
+            {
+                'id1': 1,
+                'id2': 2,
+                'id3': 3,
+            },
+            {}
+        ]
+    }
+    expected = copy.deepcopy(actual)
+    assert list(format_diff(actual, expected)) == []
+
+    actual = {'toto': 1}
+    expected = {'toto': 2}
+    assert list(format_diff(actual, expected)) == [
+        '--- actual\n',
+        '+++ expected\n',
+        '@@ -1,3 +1,3 @@\n',
+        ' {\n',
+        '\x1b[1;31m-    "toto": 1\n\x1b[0;m',
+        '\x1b[1;32m+    "toto": 2\n\x1b[0;m',
+        ' }\n',
+    ]
+
+    expected = {}
+    assert list(format_diff(actual, expected)) == [
+        '--- actual\n',
+        '+++ expected\n',
+        '@@ -1,3 +1 @@\n',
+        '\x1b[1;31m-{\n\x1b[0;m',
+        '\x1b[1;31m-    "toto": 1\n\x1b[0;m',
+        '\x1b[1;31m-}\n\x1b[0;m',
+        '\x1b[1;32m+{}\n\x1b[0;m',
+    ]
