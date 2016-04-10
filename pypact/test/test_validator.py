@@ -12,13 +12,14 @@ def spec_test(testcase):
         test_case = json.load(test_case)
     compare = compare_requests if os.path.join('testcases', 'request') in testcase else compare_responses
     diff = list(compare(test_case['actual'], test_case['expected']))
-    if test_case['match'] and diff:
-        raise AssertionError(''.join(
-            ['\nfile %s: actual and expected should match but the compare function returned a diff\n' % testcase] + diff
-        ))
-    if not test_case['match'] and not diff:
-        raise AssertionError(
-            '\nfile "%s": actual and expected should not match but the compare function returned no diff' % testcase)
+    match_error_msg = (''.join(
+        ['\nfile %s: actual and expected should match but the compare function returned a diff\n' % testcase] + diff
+    ))
+    assert not (test_case['match'] and diff), match_error_msg
+    not_match_error_msg = (
+        '\nfile "%s": actual and expected should not match but the compare function returned no diff' % testcase
+    )
+    assert test_case['match'] or diff, not_match_error_msg
 
 
 def test_specification_v1_1(testcase_v1_1):
