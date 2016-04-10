@@ -1,41 +1,40 @@
+import pytest
+
 from ..matchers import PathMatcher
 
+def json_path_testcases():
+    # return a list of (json_path, paths_expected_to_match, paths_expected_not_to_match)
+    return [
+        ("$.toto", ["['$']['toto']"], ["['$']['atoto']"]),
+        ("$[0]", ["['$'][0]"], ["['$']['0']", "['$'][1]"]),
+        (
+            "$.toto.titi['tutu']",
+            ["['$']['toto']['titi']['tutu']"],
+            ["['$']['toto']['titi']['titu']", "['$']['tito']['titi']['tutu']"]
+        ),
+        ("$.toto['titi'].tutu", ["['$']['toto']['titi']['tutu']"], []),
+        ("$.toto.titi['tutu'].*", ["['$']['toto']['titi']['tutu']['cucu']['kiki']"], []),
+        (
+            "$.toto.titi[*].*",
+            ["['$']['toto']['titi'][2]['cucu']['kiki']"],
+            ["['$']['toto']['titi']['tata']['cucu']['kiki']"]
+        ),
+        (
+            "$.toto.titi.*.toto[0]",
+            ["['$']['toto']['titi']['cucu']['toto'][0]"],
+            ["['$']['toto']['titi']['cucu']['toto'][1]"]
+        ),
+    ]
 
-def test_json_path_to_regex():
-    path = "$.toto"
-    regex = PathMatcher.from_jsonpath(path)
-    assert regex.match("['$']['toto']")
-    assert not regex.match("['$']['atoto']")
 
-    path = "$[0]"
-    regex = PathMatcher.from_jsonpath(path)
-    assert regex.match("['$'][0]")
-    assert not regex.match("['$']['0']")
-    assert not regex.match("['$'][1]")
-
-    path = "$.toto.titi['tutu']"
-    regex = PathMatcher.from_jsonpath(path)
-    assert regex.match("['$']['toto']['titi']['tutu']")
-    assert not regex.match("['$']['toto']['titi']['titu']")
-    assert not regex.match("['$']['tito']['titi']['tutu']")
-
-    path = "$.toto['titi'].tutu"
-    regex = PathMatcher.from_jsonpath(path)
-    assert regex.match("['$']['toto']['titi']['tutu']")
-
-    path = "$.toto.titi['tutu'].*"
-    regex = PathMatcher.from_jsonpath(path)
-    assert regex.match("['$']['toto']['titi']['tutu']['cucu']['kiki']")
-
-    path = "$.toto.titi[*].*"
-    regex = PathMatcher.from_jsonpath(path)
-    assert regex.match("['$']['toto']['titi'][2]['cucu']['kiki']")
-    assert not regex.match("['$']['toto']['titi']['tata']['cucu']['kiki']")
-
-    path = "$.toto.titi.*.toto[0]"
-    regex = PathMatcher.from_jsonpath(path)
-    assert regex.match("['$']['toto']['titi']['cucu']['toto'][0]")
-    assert not regex.match("['$']['toto']['titi']['cucu']['toto'][1]")
+@pytest.fixture(params=json_path_testcases())
+def test_json_path_to_regex(json_path_testcase):
+    json_path, match, not_match = json_path_testcase
+    regex = PathMatcher.from_jsonpath(json_path)
+    for path in match:
+        assert regex.match(path)
+    for path in not_match:
+        assert not regex.match(path)
 
 
 def test_json_path_weight():
@@ -57,3 +56,7 @@ def test_json_path_weight():
     test_path = "['$']['body']['item1']['level'][1]['id']"
     for path, weight in test_cases:
         assert PathMatcher.from_jsonpath(path).weight(test_path) == weight
+
+
+def test_value_matchers():
+    pass

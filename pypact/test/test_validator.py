@@ -9,14 +9,16 @@ from ..validator import compare_requests, compare_responses, format_diff
 
 def spec_test(testcase):
     with open(testcase, 'r') as test_case:
-        test_case = test_case.read()
-        test_case = json.loads(test_case)
+        test_case = json.load(test_case)
     compare = compare_requests if os.path.join('testcases', 'request') in testcase else compare_responses
     diff = list(compare(test_case['actual'], test_case['expected']))
     if test_case['match'] and diff:
-        raise AssertionError(''.join(['\nfile %s:\n' % testcase] + diff))
+        raise AssertionError(''.join(
+            ['\nfile %s: actual and expected should match but the compare function returned a diff\n' % testcase] + diff
+        ))
     if not test_case['match'] and not diff:
-        raise AssertionError('file "%s": actual and expected should not match but no diff detected' % testcase)
+        raise AssertionError(
+            '\nfile "%s": actual and expected should not match but the compare function returned no diff' % testcase)
 
 
 def test_specification_v1_1(testcase_v1_1):
