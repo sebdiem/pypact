@@ -173,7 +173,7 @@ class RegexMatcher(ValueMatcher):
         self.regex = re.compile(regex)
 
     def diff(self, actual, expected=None):
-        if not re.match(self.regex, actual):
+        if not re.match(self.regex, str(actual)):
             return RegexNotMatched(actual, self.regex.pattern)
 
 
